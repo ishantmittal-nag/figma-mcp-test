@@ -1,0 +1,30 @@
+name: Sync Figma Icons
+
+on:
+  workflow_dispatch: # Allows you to trigger this manually from GitHub Actions tab
+  schedule:
+    - cron: '0 0 * * *' # Optional: Runs automatically every night at midnight
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Figma Export Action
+        uses: primer/figma-action@v1.0.0-alpha.3
+        with:
+          args: "format=svg outputDir=./assets/icons/"
+        env:
+          FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+          # Replace with your actual Figma File URL
+          FIGMA_FILE_URL: "https://www.figma.com/design/MmTgevi8mvxSknkG4PneZ3/Simple-Design-System--Community-?node-id=9762-187&p=f&t=aCvl7knm3OXOvYc0-0"
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "Figma Bot"
+          git config --global user.email "figmabot@github.com"
+          git add ./assets/icons/
+          git diff-index --quiet HEAD || git commit -m "chore: automated figma icon update"
+          git push
