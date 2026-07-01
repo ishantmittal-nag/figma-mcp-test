@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: 24
 
-      - name: Fetch and Download Icons
+      - name: Fetch and Download Demo Icons
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
           FIGMA_FILE_ID: "MmTgevi8mvxSknkG4PneZ3"
@@ -56,22 +56,24 @@ jobs:
             const fileData = await fetchUrl(\`https://api.figma.com/v1/files/\${fileId}\`, headers);
             
             const componentMap = fileData.components || {};
-            const componentIds = Object.keys(componentMap);
+            
+            // CRUCIAL: Limit the array to exactly 100 items for this integration demo
+            const componentIds = Object.keys(componentMap).slice(0, 100);
 
             if (componentIds.length === 0) {
-              console.log('No registered components found in the file metadata.');
+              console.log('No components found.');
               return;
             }
 
-            console.log(\`Found \${componentIds.length} total component references. Requesting encoded image URLs...\`);
+            console.log(\`Demo Mode: Requesting image URLs for exactly \${componentIds.length} components...\`);
             
-            const chunkSize = 50; // Smaller chunk size for safer processing
+            // Processing 100 items in 2 quick batches of 50
+            const chunkSize = 50; 
             let downloadedCount = 0;
 
             for (let i = 0; i < componentIds.length; i += chunkSize) {
               const chunk = componentIds.slice(i, i + chunkSize);
               
-              // Use URLSearchParams to safely encode colons (e.g., 9762:187 -> 9762%3A187)
               const params = new URLSearchParams({
                 ids: chunk.join(','),
                 format: 'svg'
@@ -80,19 +82,11 @@ jobs:
               const apiUrl = \`https://api.figma.com/v1/images/\${fileId}?\${params.toString()}\`;
               const imgData = await fetchUrl(apiUrl, headers);
               
-              if (imgData.err) {
-                console.error(\`API Error in batch: \${imgData.err}\`);
-                continue;
-              }
-
               if (imgData.images) {
                 for (const [id, url] of Object.entries(imgData.images)) {
                   if (!url) continue;
-                  
-                  // Extract a clean name
                   let rawName = componentMap[id]?.name || id;
                   let cleanName = rawName.replace(/[\/\\?%*:|'\"<> ]/g, '_');
-                  
                   const filename = \`./assets/icons/\${cleanName}.svg\`;
                   await downloadFile(url, filename);
                   downloadedCount++;
@@ -109,12 +103,10 @@ jobs:
         run: |
           git config --global user.name "Figma Bot"
           git config --global user.email "figmabot@github.com"
-          
           git add assets/icons/
-          
           if ! git diff --cached --quiet; then
             git commit -m "chore: automated figma icon update"
             git push origin HEAD:${{ github.ref_name }}
           else
-            echo "No changes detected. Git workspace is clean."
+            echo "No changes detected."
           fi
