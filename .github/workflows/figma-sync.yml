@@ -55,29 +55,41 @@ jobs:
             console.log('Fetching file data from Figma...');
             const fileData = await fetchUrl(\`https://api.figma.com/v1/files/\${fileId}\`, headers);
             
-            // Map to store fallback names from component definitions
             const componentMap = fileData.components || {};
             const componentIds = Object.keys(componentMap);
 
             if (componentIds.length === 0) {
-              console.log('No registered components found in the metadata.');
+              console.log('No registered components found in the file metadata.');
               return;
             }
 
-            console.log(\`Found \${componentIds.length} total metadata component structural references. Extracting asset URLs...\`);
+            console.log(\`Found \${componentIds.length} total component references. Requesting encoded image URLs...\`);
             
-            const chunkSize = 100;
+            const chunkSize = 50; // Smaller chunk size for safer processing
             let downloadedCount = 0;
 
             for (let i = 0; i < componentIds.length; i += chunkSize) {
               const chunk = componentIds.slice(i, i + chunkSize);
-              const imgData = await fetchUrl(\`https://api.figma.com/v1/images/\${fileId}?ids=\${chunk.join(',')}&format=svg\`, headers);
               
+              // Use URLSearchParams to safely encode colons (e.g., 9762:187 -> 9762%3A187)
+              const params = new URLSearchParams({
+                ids: chunk.join(','),
+                format: 'svg'
+              });
+
+              const apiUrl = \`https://api.figma.com/v1/images/\${fileId}?\${params.toString()}\`;
+              const imgData = await fetchUrl(apiUrl, headers);
+              
+              if (imgData.err) {
+                console.error(\`API Error in batch: \${imgData.err}\`);
+                continue;
+              }
+
               if (imgData.images) {
                 for (const [id, url] of Object.entries(imgData.images)) {
                   if (!url) continue;
                   
-                  // Sanitize the component name for filesystem safety
+                  // Extract a clean name
                   let rawName = componentMap[id]?.name || id;
                   let cleanName = rawName.replace(/[\/\\?%*:|'\"<> ]/g, '_');
                   
@@ -98,12 +110,11 @@ jobs:
           git config --global user.name "Figma Bot"
           git config --global user.email "figmabot@github.com"
           
-          # Force git to see the files
           git add assets/icons/
           
           if ! git diff --cached --quiet; then
             git commit -m "chore: automated figma icon update"
             git push origin HEAD:${{ github.ref_name }}
           else
-            echo "No changes detected. Files might not have changed or weren't written."
+            echo "No changes detected. Git workspace is clean."
           fi
