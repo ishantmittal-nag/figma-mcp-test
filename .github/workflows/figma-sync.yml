@@ -19,8 +19,7 @@ jobs:
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
           # Replace with your actual Figma File URL
-          FIGMA_FILE_URL: "https://www.figma.com/design/MmTgevi8mvxSknkG4PneZ3/Simple-Design-System--Community-?node-id=9762-187&p=f&t=aCvl7knm3OXOvYc0-0"
-
+          FIGMA_FILE_URL: "https://www.figma.com/file/MmTgevi8mvxSknkG4PneZ3"
       - name: Commit and Push Changes
         run: |
           git config --global user.name "Figma Bot"
