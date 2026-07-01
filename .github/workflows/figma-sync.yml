@@ -14,12 +14,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24 # Updated to prevent the deprecation warning
 
       - name: Fetch and Download Icons
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
-          # Extracting just the file ID from your URL
           FIGMA_FILE_ID: "MmTgevi8mvxSknkG4PneZ3"
         run: |
           mkdir -p ./assets/icons
@@ -31,7 +30,14 @@ jobs:
             https.get(url, { headers }, (res) => {
               let data = '';
               res.on('data', chunk => data += chunk);
-              res.on('end', () => resolve(JSON.parse(data)));
+              res.on('end', () => {
+                try {
+                  resolve(JSON.parse(data));
+                } catch(e) {
+                  console.error('Failed to parse JSON. Raw response preview:', data.substring(0, 200));
+                  reject(e);
+                }
+              });
             }).on('error', reject);
           });
 
@@ -51,7 +57,6 @@ jobs:
             console.log('Fetching components from Figma file...');
             const fileData = await fetchUrl(\`https://api.figma.com/v1/files/\${fileId}\`, headers);
             
-            // Find all components in the file
             const componentIds = [];
             function findComponents(node) {
               if (node.type === 'COMPONENT') componentIds.push(node.id);
@@ -60,19 +65,29 @@ jobs:
             findComponents(fileData.document);
 
             if (componentIds.length === 0) {
-              console.log('No components found in this Figma file. Ensure your icons are wrapped in Components (Ctrl+Alt+K).');
+              console.log('No components found.');
               return;
             }
 
-            console.log(\`Found \${componentIds.length} components. Requesting SVG export links...\`);
-            const imgData = await fetchUrl(\`https://api.figma.com/v1/images/\${fileId}?ids=\${componentIds.join(',')}&format=svg\`, headers);
+            console.log(\`Found \${componentIds.length} components. Splitting requests into safe batches...\`);
             
-            for (const [id, url] of Object.entries(imgData.images)) {
-              if (!url) continue;
-              const componentName = fileData.components[id].name.replace(/[\/\\?%*:|'\"<> ]/g, '_');
-              const filename = \`./assets/icons/\${componentName}.svg\`;
-              console.log(\`Downloading \${filename}...\`);
-              await downloadFile(url, filename);
+            // Chunking into batches of 100 to avoid hitting Figma API URL limits
+            const chunkSize = 100;
+            for (let i = 0; i < componentIds.length; i += chunkSize) {
+              const chunk = componentIds.slice(i, i + chunkSize);
+              console.log(\`Processing batch \${Math.floor(i/chunkSize) + 1} of \${Math.ceil(componentIds.length/chunkSize)}...\`);
+              
+              const imgData = await fetchUrl(\`https://api.figma.com/v1/images/\${fileId}?ids=\${chunk.join(',')}&format=svg\`, headers);
+              
+              if (imgData.images) {
+                for (const [id, url] of Object.entries(imgData.images)) {
+                  if (!url) continue;
+                  // Clean file names by eliminating illegal characters
+                  const componentName = fileData.components[id].name.replace(/[\/\\?%*:|'\"<> ]/g, '_');
+                  const filename = \`./assets/icons/\${componentName}.svg\`;
+                  await downloadFile(url, filename);
+                }
+              }
             }
             console.log('All icons synced successfully!');
           }
