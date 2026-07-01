@@ -3,6 +3,9 @@ name: Sync Figma Icons
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -14,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24 # Updated to prevent the deprecation warning
+          node-version: 24
 
       - name: Fetch and Download Icons
         env:
@@ -31,12 +34,7 @@ jobs:
               let data = '';
               res.on('data', chunk => data += chunk);
               res.on('end', () => {
-                try {
-                  resolve(JSON.parse(data));
-                } catch(e) {
-                  console.error('Failed to parse JSON. Raw response preview:', data.substring(0, 200));
-                  reject(e);
-                }
+                try { resolve(JSON.parse(data)); } catch(e) { reject(e); }
               });
             }).on('error', reject);
           });
@@ -54,42 +52,42 @@ jobs:
             const fileId = process.env.FIGMA_FILE_ID;
             const headers = { 'X-Figma-Token': token };
 
-            console.log('Fetching components from Figma file...');
+            console.log('Fetching file data from Figma...');
             const fileData = await fetchUrl(\`https://api.figma.com/v1/files/\${fileId}\`, headers);
             
-            const componentIds = [];
-            function findComponents(node) {
-              if (node.type === 'COMPONENT') componentIds.push(node.id);
-              if (node.children) node.children.forEach(findComponents);
-            }
-            findComponents(fileData.document);
+            // Map to store fallback names from component definitions
+            const componentMap = fileData.components || {};
+            const componentIds = Object.keys(componentMap);
 
             if (componentIds.length === 0) {
-              console.log('No components found.');
+              console.log('No registered components found in the metadata.');
               return;
             }
 
-            console.log(\`Found \${componentIds.length} components. Splitting requests into safe batches...\`);
+            console.log(\`Found \${componentIds.length} total metadata component structural references. Extracting asset URLs...\`);
             
-            // Chunking into batches of 100 to avoid hitting Figma API URL limits
             const chunkSize = 100;
+            let downloadedCount = 0;
+
             for (let i = 0; i < componentIds.length; i += chunkSize) {
               const chunk = componentIds.slice(i, i + chunkSize);
-              console.log(\`Processing batch \${Math.floor(i/chunkSize) + 1} of \${Math.ceil(componentIds.length/chunkSize)}...\`);
-              
               const imgData = await fetchUrl(\`https://api.figma.com/v1/images/\${fileId}?ids=\${chunk.join(',')}&format=svg\`, headers);
               
               if (imgData.images) {
                 for (const [id, url] of Object.entries(imgData.images)) {
                   if (!url) continue;
-                  // Clean file names by eliminating illegal characters
-                  const componentName = fileData.components[id].name.replace(/[\/\\?%*:|'\"<> ]/g, '_');
-                  const filename = \`./assets/icons/\${componentName}.svg\`;
+                  
+                  // Sanitize the component name for filesystem safety
+                  let rawName = componentMap[id]?.name || id;
+                  let cleanName = rawName.replace(/[\/\\?%*:|'\"<> ]/g, '_');
+                  
+                  const filename = \`./assets/icons/\${cleanName}.svg\`;
                   await downloadFile(url, filename);
+                  downloadedCount++;
                 }
               }
             }
-            console.log('All icons synced successfully!');
+            console.log(\`Successfully downloaded \${downloadedCount} physical SVG files!\`);
           }
 
           main().catch(err => { console.error(err); process.exit(1); });
@@ -99,6 +97,13 @@ jobs:
         run: |
           git config --global user.name "Figma Bot"
           git config --global user.email "figmabot@github.com"
-          git add ./assets/icons/
-          git diff-index --quiet HEAD || git commit -m "chore: automated figma icon update"
-          git push
+          
+          # Force git to see the files
+          git add assets/icons/
+          
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: automated figma icon update"
+            git push origin HEAD:${{ github.ref_name }}
+          else
+            echo "No changes detected. Files might not have changed or weren't written."
+          fi
