@@ -2,25 +2,83 @@ name: Sync Figma Icons
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    # Moving env here forces GitHub to guarantee availability inside the container
-    env:
-      FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
-      FIGMA_FILE_URL: "https://www.figma.com/file/MmTgevi8mvxSknkG4PneZ3"
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Run Figma Export Action
-        uses: primer/figma-action@v1.0.0-alpha.3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          args: "format=svg outputDir=./assets/icons/"
+          node-version: 20
+
+      - name: Fetch and Download Icons
+        env:
+          FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+          # Extracting just the file ID from your URL
+          FIGMA_FILE_ID: "MmTgevi8mvxSknkG4PneZ3"
+        run: |
+          mkdir -p ./assets/icons
+          node -e "
+          const fs = require('fs');
+          const https = require('https');
+
+          const fetchUrl = (url, headers = {}) => new Promise((resolve, reject) => {
+            https.get(url, { headers }, (res) => {
+              let data = '';
+              res.on('data', chunk => data += chunk);
+              res.on('end', () => resolve(JSON.parse(data)));
+            }).on('error', reject);
+          });
+
+          const downloadFile = (url, dest) => new Promise((resolve, reject) => {
+            const file = fs.createWriteStream(dest);
+            https.get(url, (res) => {
+              res.pipe(file);
+              file.on('finish', () => file.close(resolve));
+            }).on('error', reject);
+          });
+
+          async function main() {
+            const token = process.env.FIGMA_TOKEN;
+            const fileId = process.env.FIGMA_FILE_ID;
+            const headers = { 'X-Figma-Token': token };
+
+            console.log('Fetching components from Figma file...');
+            const fileData = await fetchUrl(\`https://api.figma.com/v1/files/\${fileId}\`, headers);
+            
+            // Find all components in the file
+            const componentIds = [];
+            function findComponents(node) {
+              if (node.type === 'COMPONENT') componentIds.push(node.id);
+              if (node.children) node.children.forEach(findComponents);
+            }
+            findComponents(fileData.document);
+
+            if (componentIds.length === 0) {
+              console.log('No components found in this Figma file. Ensure your icons are wrapped in Components (Ctrl+Alt+K).');
+              return;
+            }
+
+            console.log(\`Found \${componentIds.length} components. Requesting SVG export links...\`);
+            const imgData = await fetchUrl(\`https://api.figma.com/v1/images/\${fileId}?ids=\${componentIds.join(',')}&format=svg\`, headers);
+            
+            for (const [id, url] of Object.entries(imgData.images)) {
+              if (!url) continue;
+              const componentName = fileData.components[id].name.replace(/[\/\\?%*:|'\"<> ]/g, '_');
+              const filename = \`./assets/icons/\${componentName}.svg\`;
+              console.log(\`Downloading \${filename}...\`);
+              await downloadFile(url, filename);
+            }
+            console.log('All icons synced successfully!');
+          }
+
+          main().catch(err => { console.error(err); process.exit(1); });
+          "
 
       - name: Commit and Push Changes
         run: |
