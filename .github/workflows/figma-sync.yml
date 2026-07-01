@@ -1,13 +1,18 @@
 name: Sync Figma Icons
 
 on:
-  workflow_dispatch: # Allows you to trigger this manually from GitHub Actions tab
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # Optional: Runs automatically every night at midnight
+    - cron: '0 0 * * *'
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # Moving env here forces GitHub to guarantee availability inside the container
+    env:
+      FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
+      FIGMA_FILE_URL: "https://www.figma.com/file/MmTgevi8mvxSknkG4PneZ3"
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -16,10 +21,7 @@ jobs:
         uses: primer/figma-action@v1.0.0-alpha.3
         with:
           args: "format=svg outputDir=./assets/icons/"
-        env:
-          FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
-          # Replace with your actual Figma File URL
-          FIGMA_FILE_URL: "https://www.figma.com/file/MmTgevi8mvxSknkG4PneZ3"
+
       - name: Commit and Push Changes
         run: |
           git config --global user.name "Figma Bot"
