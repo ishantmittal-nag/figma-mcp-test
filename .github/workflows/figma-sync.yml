@@ -1,40 +1,43 @@
 name: Sync Figma Icons
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   sync:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
-
       - name: Fetch and Download Demo Icons
         env:
           FIGMA_TOKEN: ${{ secrets.FIGMA_TOKEN }}
-          FIGMA_FILE_ID: "MmTgevi8mvxSknkG4PneZ3"
+          FIGMA_FILE_ID: "CLAPgkDbJZ2MYXsXGvl8uz"
         run: |
           mkdir -p ./assets/icons
           node -e "
           const fs = require('fs');
           const https = require('https');
 
+          // Fixed: now checks statusCode before resolving, so bad
+          // file IDs / bad tokens fail loudly instead of silently
+          // returning an empty result.
           const fetchUrl = (url, headers = {}) => new Promise((resolve, reject) => {
             https.get(url, { headers }, (res) => {
               let data = '';
               res.on('data', chunk => data += chunk);
               res.on('end', () => {
-                try { resolve(JSON.parse(data)); } catch(e) { reject(e); }
+                let parsed;
+                try { parsed = JSON.parse(data); }
+                catch(e) { return reject(new Error('Non-JSON response (status ' + res.statusCode + '): ' + data.slice(0,200))); }
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                  return reject(new Error('Figma API error ' + res.statusCode + ': ' + JSON.stringify(parsed)));
+                }
+                resolve(parsed);
               });
             }).on('error', reject);
           });
@@ -42,6 +45,9 @@ jobs:
           const downloadFile = (url, dest) => new Promise((resolve, reject) => {
             const file = fs.createWriteStream(dest);
             https.get(url, (res) => {
+              if (res.statusCode < 200 || res.statusCode >= 300) {
+                return reject(new Error('Download failed (' + res.statusCode + ') for ' + url));
+              }
               res.pipe(file);
               file.on('finish', () => file.close(resolve));
             }).on('error', reject);
@@ -50,55 +56,52 @@ jobs:
           async function main() {
             const token = process.env.FIGMA_TOKEN;
             const fileId = process.env.FIGMA_FILE_ID;
+            if (!token) throw new Error('FIGMA_TOKEN secret is not set.');
             const headers = { 'X-Figma-Token': token };
 
-            console.log('Fetching file data from Figma...');
+            console.log('Fetching file data for', fileId, '...');
             const fileData = await fetchUrl(\`https://api.figma.com/v1/files/\${fileId}\`, headers);
-            
-            const componentMap = fileData.components || {};
-            
-            // CRUCIAL: Limit the array to exactly 100 items for this integration demo
+
+            // Combine both maps: 'components' holds individual component
+            // nodes (e.g. each variant), 'componentSets' holds the parent
+            // set (e.g. the whole Button set). Icons/images can live in either.
+            const componentMap = { ...(fileData.components || {}), ...(fileData.componentSets || {}) };
             const componentIds = Object.keys(componentMap).slice(0, 100);
 
             if (componentIds.length === 0) {
-              console.log('No components found.');
+              console.log('No components found in this file. Raw keys check:', Object.keys(fileData));
               return;
             }
+            console.log(\`Found \${componentIds.length} components. Requesting image URLs...\`);
 
-            console.log(\`Demo Mode: Requesting image URLs for exactly \${componentIds.length} components...\`);
-            
-            // Processing 100 items in 2 quick batches of 50
-            const chunkSize = 50; 
+            const chunkSize = 50;
             let downloadedCount = 0;
-
             for (let i = 0; i < componentIds.length; i += chunkSize) {
               const chunk = componentIds.slice(i, i + chunkSize);
-              
-              const params = new URLSearchParams({
-                ids: chunk.join(','),
-                format: 'svg'
-              });
-
+              const params = new URLSearchParams({ ids: chunk.join(','), format: 'svg' });
               const apiUrl = \`https://api.figma.com/v1/images/\${fileId}?\${params.toString()}\`;
               const imgData = await fetchUrl(apiUrl, headers);
-              
+
+              if (imgData.err) {
+                console.log('Image export error:', imgData.err);
+                continue;
+              }
               if (imgData.images) {
                 for (const [id, url] of Object.entries(imgData.images)) {
-                  if (!url) continue;
-                  let rawName = componentMap[id]?.name || id;
-                  let cleanName = rawName.replace(/[\/\\?%*:|'\"<> ]/g, '_');
+                  if (!url) { console.log('No render URL for node', id, '(possibly not exportable)'); continue; }
+                  const rawName = componentMap[id]?.name || id;
+                  const cleanName = rawName.replace(/[\/\\?%*:|'\"<> ]/g, '_');
                   const filename = \`./assets/icons/\${cleanName}.svg\`;
                   await downloadFile(url, filename);
                   downloadedCount++;
+                  console.log('Downloaded', filename);
                 }
               }
             }
-            console.log(\`Successfully downloaded \${downloadedCount} physical SVG files!\`);
+            console.log(\`Successfully downloaded \${downloadedCount} SVG files.\`);
           }
-
-          main().catch(err => { console.error(err); process.exit(1); });
+          main().catch(err => { console.error('FAILED:', err.message); process.exit(1); });
           "
-
       - name: Commit and Push Changes
         run: |
           git config --global user.name "Figma Bot"
